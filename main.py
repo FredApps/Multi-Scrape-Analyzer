@@ -1,33 +1,16 @@
-import asyncio, requests, aiohttp, logging
+import asyncio, requests, aiohttp
+import multiprocessing
 import time
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from bs4 import BeautifulSoup
 from collections import Counter
+from app_logging import logger, configure_worker_logging, log_to_file
 
 
 main_path = Path(__file__).parent / "LOG"
-if not main_path.exists():
-    try:
-        main_path.mkdir()
-        print(f"All Logs are stored in: {main_path}")
-    except (PermissionError, OSError) as e:
-        print(f"Something went wrong while creating LOG Directory: {e}")
-        main_path = Path(__file__).parent
-        print(f"logs will be stored in {main_path}")
+main_path_log = main_path / "main.log"
 
-main_path_log = main_path / f"{Path(__file__).stem}.log"
-log_handle = RotatingFileHandler(
-    main_path_log,
-    maxBytes=5*1024*1024,
-    encoding="utf-8",
-    backupCount=3
-)
-
-log_handle.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-logging.basicConfig(level=logging.DEBUG,
-                    handlers=[log_handle])
 
 def _content_kind(content_type):
     """Classify supported media types without depending on header casing/params."""
@@ -47,7 +30,7 @@ def _require_positive_int(value, name):
 async def fetch_url_async(session, url, max_retry, semaphore):
     _require_positive_int(max_retry, "max_retry")
     async with semaphore:
-        logging.debug(f"Fetching url: {url}")
+        logger.debug(f"Fetching url: {url}")
 
         for i in range(max_retry):
             try:
@@ -56,7 +39,7 @@ async def fetch_url_async(session, url, max_retry, semaphore):
                         if i < (max_retry - 1):
                             await asyncio.sleep(1)
                         else:
-                            logging.error(
+                            logger.error(
                                 f"Aysncio Scraping Failed on [{url}] | Error: Invalid Status Code:{response.status}\n")
                             return {"url": url, "success": False, "content": f"Invalid Status Code:{response.status}"}
 
@@ -66,7 +49,7 @@ async def fetch_url_async(session, url, max_retry, semaphore):
                         if content_kind == "text":
                             web_content = await response.text()
 
-                            logging.info(f"Aysncio Scraping Successful on [{url}] | Content-Type: html/text ")
+                            logger.info(f"Aysncio Scraping Successful on [{url}] | Content-Type: html/text ")
                             return {"url": url,
                                     "success": True,
                                     "content": web_content,
@@ -76,7 +59,7 @@ async def fetch_url_async(session, url, max_retry, semaphore):
                         elif content_kind == "json":
                             web_content = await response.json()
 
-                            logging.info(f"Aysncio Scraping Successful on [{url}] | Content-Type: Application/json ")
+                            logger.info(f"Aysncio Scraping Successful on [{url}] | Content-Type: Application/json ")
                             return {"url": url,
                                     "success": True,
                                     "content": web_content,
@@ -84,53 +67,53 @@ async def fetch_url_async(session, url, max_retry, semaphore):
                                     }
                         else:
                             message = f"Unsupported Content-Type: {content_type or '(missing)'}"
-                            logging.error(f"Aysncio Scraping Failed on [{url}] | Error: {message}")
+                            logger.error(f"Aysncio Scraping Failed on [{url}] | Error: {message}")
                             return {"url": url, "success": False, "content": message}
 
             except aiohttp.ClientConnectorError as cce:
                 if i < (max_retry - 1):
                     await asyncio.sleep(1)
                 else:
-                    logging.error(f"Aysncio Scraping Failed on [{url}] | Error: {cce}\n")
+                    logger.error(f"Aysncio Scraping Failed on [{url}] | Error: {cce}\n")
                     return {"url": url, "success": False, "content": str(cce)}
 
             except aiohttp.ClientHttpProxyError as chpe:
                 if i < (max_retry - 1):
                     await asyncio.sleep(1)
                 else:
-                    logging.error(f"Aysncio Scraping Failed on [{url}] | Error: {chpe}\n")
+                    logger.error(f"Aysncio Scraping Failed on [{url}] | Error: {chpe}\n")
                     return {"url": url, "success": False, "content": str(chpe)}
 
             except aiohttp.ServerDisconnectedError as sde:
                 if i < (max_retry - 1):
                     await asyncio.sleep(1)
                 else:
-                    logging.error(f"Aysncio Scraping Failed on [{url}] | Error: {sde}\n")
+                    logger.error(f"Aysncio Scraping Failed on [{url}] | Error: {sde}\n")
                     return {"url": url, "success": False, "content": str(sde)}
 
             except aiohttp.ClientPayloadError as cpe:
                 if i < (max_retry - 1):
                     await asyncio.sleep(1)
                 else:
-                    logging.error(f"Aysncio Scraping Failed on [{url}] | Error: {cpe}\n")
+                    logger.error(f"Aysncio Scraping Failed on [{url}] | Error: {cpe}\n")
                     return {"url": url, "success": False, "content": str(cpe)}
 
             except asyncio.TimeoutError as te:
                 if i < (max_retry - 1):
                     await asyncio.sleep(1)
                 else:
-                    logging.error(f"Aysncio Scraping Failed on [{url}] | Error: {te}\n")
+                    logger.error(f"Aysncio Scraping Failed on [{url}] | Error: {te}\n")
                     return {"url": url, "success": False, "content": str(te) or type(te).__name__}
 
             except Exception as e:
                 if i < max_retry - 1:
                     await asyncio.sleep(1)
                 else:
-                    logging.error(f"Aysncio Scraping Failed on [{url}] | Error: {e}\n")
+                    logger.error(f"Aysncio Scraping Failed on [{url}] | Error: {e}\n")
                     return {"url": url, "success": False, "content": str(e)}
 
 async def fetch_multiple_urls_async(urls, max_retry=None, max_workers=None):
-    logging.debug("Fetching Url Request | Method: Asyncio")
+    logger.debug("Fetching Url Request | Method: Asyncio")
 
     max_retry = 4 if max_retry is None else max_retry
     max_workers = 4 if max_workers is None else max_workers
@@ -139,9 +122,9 @@ async def fetch_multiple_urls_async(urls, max_retry=None, max_workers=None):
     time_out = aiohttp.ClientTimeout(sock_connect=5, sock_read=5)
     semaphore = asyncio.Semaphore(max_workers)
 
-    logging.info(
+    logger.info(
         f"Max Retries for Scrape: {max_retry}, Max Workers for AsyncioThreads: {max_workers}, Urls: {len(urls)}")
-    logging.debug(f"Asyncio Threading Process Started")
+    logger.debug(f"Asyncio Threading Process Started")
 
     start = time.perf_counter()
     async with aiohttp.ClientSession(timeout=time_out) as session:
@@ -151,15 +134,15 @@ async def fetch_multiple_urls_async(urls, max_retry=None, max_workers=None):
     finished = round(time.perf_counter() - start, 5)
     cpu_time = {"cpu_time_async": finished}
 
-    logging.info(f"Aysncio Threading Process Completed | Elapsed Time: {finished} Secs")
+    logger.info(f"Aysncio Threading Process Completed | Elapsed Time: {finished} Secs")
     re_list.append(cpu_time)
 
-    logging.info(f"Returning Scraped lIst: {len(re_list)}\n")
+    logger.info(f"Returning Scraped lIst: {len(re_list)}\n")
     return re_list
 
 def fetch_url_threaded(url, max_retry):
     _require_positive_int(max_retry, "max_retry")
-    logging.debug(f"Fetching url: {url}")
+    logger.debug(f"Fetching url: {url}")
 
     for i in range(max_retry):
         try:
@@ -168,7 +151,7 @@ def fetch_url_threaded(url, max_retry):
                 if i < max_retry - 1:
                     time.sleep(1)
                 else:
-                    logging.error(
+                    logger.error(
                         f"ThreadPool Scraping Failed on [{url}] | Error: Invalid Status Code:{response.status_code}\n")
                     return {"url": url, "success": False, "content": f"Invalid Status Code:{response.status_code}"}
             else:
@@ -176,7 +159,7 @@ def fetch_url_threaded(url, max_retry):
                 content_kind = _content_kind(content_type)
                 if content_kind == "text":
 
-                    logging.info(f"ThreadPool Scraping Successful on [{url}] | Content-Type: html/text ")
+                    logger.info(f"ThreadPool Scraping Successful on [{url}] | Content-Type: html/text ")
                     return {"url": url,
                             "success": True,
                             "content": response.text,
@@ -185,7 +168,7 @@ def fetch_url_threaded(url, max_retry):
 
                 elif content_kind == "json":
 
-                    logging.info(f"ThreadPool Scraping Successful on [{url}] | Content-Type: Application/Json")
+                    logger.info(f"ThreadPool Scraping Successful on [{url}] | Content-Type: Application/Json")
                     return {"url": url,
                             "success": True,
                             "content": response.json(),
@@ -193,49 +176,49 @@ def fetch_url_threaded(url, max_retry):
                             }
                 else:
                     message = f"Unsupported Content-Type: {content_type or '(missing)'}"
-                    logging.error(f"ThreadPool Scraping Failed on [{url}] | Error: {message}")
+                    logger.error(f"ThreadPool Scraping Failed on [{url}] | Error: {message}")
                     return {"url": url, "success": False, "content": message}
 
         except ConnectionError as ce:
             if i < max_retry - 1:
                 time.sleep(1)
             else:
-                logging.error(f"ThreadPool Scraping Failed on [{url}] | Error: {ce}\n")
+                logger.error(f"ThreadPool Scraping Failed on [{url}] | Error: {ce}\n")
                 return {"url": url, "success": False, "content": str(ce)}
 
         except TimeoutError as te:
             if i < max_retry - 1:
                 time.sleep(1)
             else:
-                logging.error(f"ThreadPool Scraping Failed on [{url}] | Error: {te}\n")
+                logger.error(f"ThreadPool Scraping Failed on [{url}] | Error: {te}\n")
                 return {"url": url, "success": False, "content": str(te) or type(te).__name__}
 
         except requests.RequestException as rx:
             if i < max_retry - 1:
                 time.sleep(1)
             else:
-                logging.error(f"ThreadPool Scraping Failed on [{url}] | Error: {rx}\n")
+                logger.error(f"ThreadPool Scraping Failed on [{url}] | Error: {rx}\n")
                 return {"url": url, "success": False, "content": str(rx)}
 
         except Exception as e:
             if i < max_retry - 1:
                 time.sleep(1)
             else:
-                logging.error(f"ThreadPool Scraping Failed on [{url}] | Error: {e}\n")
+                logger.error(f"ThreadPool Scraping Failed on [{url}] | Error: {e}\n")
                 return {"url": url, "success": False, "content": str(e)}
 
 def fetch_multiple_threaded(urls, max_retry=None, max_workers=None):
-    logging.debug(f"Starting Url Scraping | Method: ThreadPool\n")
-    logging.debug("Fetching Url Request | Method: ThreadPool")
+    logger.debug(f"Starting Url Scraping | Method: ThreadPool\n")
+    logger.debug("Fetching Url Request | Method: ThreadPool")
 
     max_workers = 4 if max_workers is None else max_workers
     max_retry = 4 if max_retry is None else max_retry
     _require_positive_int(max_workers, "max_workers")
     _require_positive_int(max_retry, "max_retry")
 
-    logging.info(
+    logger.info(
         f"Max Retries for Scrape: {max_retry}, Max Workers for ThreadPool Threads: {max_workers}, Urls: {len(urls)}")
-    logging.debug(f"ThreadPool Threading Process Started")
+    logger.debug(f"ThreadPool Threading Process Started")
 
     start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -244,23 +227,23 @@ def fetch_multiple_threaded(urls, max_retry=None, max_workers=None):
     finished = round(time.perf_counter() - start, 5)
     cpu_time = {"cpu_time_threaded": finished}
 
-    logging.info(f"ThreadPool Threading Process Completed | Elapsed Time: {finished} Secs")
+    logger.info(f"ThreadPool Threading Process Completed | Elapsed Time: {finished} Secs")
     result.append(cpu_time)
 
-    logging.info(f"Returning Scraped lIst: {len(result)}\n")
+    logger.info(f"Returning Scraped lIst: {len(result)}\n")
     return result
 
 def sequential_fetch(urls, max_retry=None):
-    logging.debug(f"Starting Url Scraping | Method: Sequential Fetch\n")
-    logging.debug("Fetching Url Request | Method: Sequential Fetch")
+    logger.debug(f"Starting Url Scraping | Method: Sequential Fetch\n")
+    logger.debug("Fetching Url Request | Method: Sequential Fetch")
 
     max_rty = 4 if max_retry is None else max_retry
     _require_positive_int(max_rty, "max_retry")
     result_list = []
 
-    logging.info(
+    logger.info(
         f"Max Retries for Scrape: {max_retry}, Urls: {len(urls)}")
-    logging.debug(f"Sequential Fetch Threading Process Started")
+    logger.debug(f"Sequential Fetch Threading Process Started")
 
     start = time.perf_counter()
     for url in urls:
@@ -269,16 +252,16 @@ def sequential_fetch(urls, max_retry=None):
     finished = round(time.perf_counter() - start, 5)
     cpu_time = {"seq_time_threaded": finished}
 
-    logging.info(f"Sequential Fetch Threading Process Completed | Elapsed Time: {finished} Secs")
+    logger.info(f"Sequential Fetch Threading Process Completed | Elapsed Time: {finished} Secs")
     result_list.append(cpu_time)
 
-    logging.info(f"Returning Scraped lIst: {len(result_list)}\n")
+    logger.info(f"Returning Scraped lIst: {len(result_list)}\n")
     return result_list
 
 def clean_words(content):
-    logging.debug("Cleaning Words")
+    logger.debug("Cleaning Words")
     page = BeautifulSoup(content, "html.parser")
-    logging.info("Page Parsed with Beautiful Soup 4")
+    logger.info("Page Parsed with Beautiful Soup 4")
     # Keep adjacent HTML text nodes from merging separate words.
     page_text = page.get_text(" ", strip=True).split()
     contraband = """ !.,“”@#$%^&*(){}[];|/\\-_=·+<>:❤'\""""
@@ -289,7 +272,7 @@ def clean_words(content):
         cleaned_word = "".join(w for w in word if w not in contraband_alt)
         if cleaned_word and cleaned_word not in [".", "-"]:
             cleaned_page_stg2.append(cleaned_word)
-    logging.info("Words in Page cleaned | Returning Content")
+    logger.info("Words in Page cleaned | Returning Content")
     return page, cleaned_page_stg2
 
 
@@ -312,7 +295,7 @@ def _analyze_word_list(cleaned_page_word_list):
 
 
 def analyze_words(content):
-    logging.debug("Analyzing Words in Page")
+    logger.debug("Analyzing Words in Page")
     _, cleaned_page_word_list = clean_words(content)
     return _analyze_word_list(cleaned_page_word_list)
 
@@ -332,13 +315,13 @@ def _analyze_html_parts(page, cleaned_page_word_list):
 
 
 def analyze_html(content):
-    logging.debug("Analyzing HTML Contents in Page")
+    logger.debug("Analyzing HTML Contents in Page")
     page, cleaned_page_word_list = clean_words(content)
     return _analyze_html_parts(page, cleaned_page_word_list)
 
 
 def process_task(dicts):
-    logging.debug("Processing Scraped Content-type")
+    logger.debug("Processing Scraped Content-type")
     url = dicts["url"]
     content_type = dicts.get("type", "")
     media_type = content_type.split(";", 1)[0].strip().lower() if isinstance(content_type, str) else ""
@@ -356,13 +339,13 @@ def process_task(dicts):
 
 
 def run_async(urls, max_rty=None, max_wrks=None):
-    logging.debug(f"Starting Url Scraping | Method: Asyncio\n")
+    logger.debug(f"Starting Url Scraping | Method: Asyncio\n")
 
     data = asyncio.run(fetch_multiple_urls_async(urls, max_rty, max_wrks))
     return data
 
 def split_urls(urls):
-    logging.debug("Splitting urls into parts for different thread methods")
+    logger.debug("Splitting urls into parts for different thread methods")
     quotient, remainder = divmod(len(urls), 3)
     groups = []
     start = 0
@@ -370,7 +353,7 @@ def split_urls(urls):
         size = quotient + (index < remainder)
         groups.append(list(urls[start:start + size]))
         start += size
-    logging.info("Url Splitting Completed")
+    logger.info("Url Splitting Completed")
     return tuple(groups)
 
 
@@ -379,23 +362,23 @@ def report_errors(errors, results):
     analysis_errors = [result for result in results if "error" in result]
     if not errors and not analysis_errors:
         print("ALL URLs PARSED SUCCESSFULLY")
-        logging.info("No Errors Found")
+        logger.info("No Errors Found")
         return
-    logging.error("Errors Found | Printing")
+    logger.error("Errors Found | Printing")
     for result in errors:
         print(f"Url: {result['url']} | Error: {result['content']}")
     for result in analysis_errors:
         print(f"Url: {result['url']} | Error: {result['error']}")
 
 
-def process_multiple_cpu_bound(urls, max_rty=None, max_wrks=None, max_wrks_pool=None):
+def process_multiple_cpu_bound(urls, max_rty=None, max_wrks=None, max_wrks_pool=None, *, log_queue=None):
     main_workers = 4 if max_wrks_pool is None else max_wrks_pool
     _require_positive_int(main_workers, "max_wrks_pool")
     _require_positive_int(4 if max_rty is None else max_rty, "max_rty")
     _require_positive_int(4 if max_wrks is None else max_wrks, "max_wrks")
 
     urls_1, urls_2, urls_3 = split_urls(urls)
-    logging.info(f"Url splits: first_set={len(urls_1)}, second_set={len(urls_2)}, third_set={len(urls_3)}\n")
+    logger.info(f"Url splits: first_set={len(urls_1)}, second_set={len(urls_2)}, third_set={len(urls_3)}\n")
 
     collected_data = []
     collected_time = {}
@@ -403,10 +386,13 @@ def process_multiple_cpu_bound(urls, max_rty=None, max_wrks=None, max_wrks_pool=
     pool_results = []
 
     start = time.perf_counter()
-    logging.debug(
+    logger.debug(
         f"Starting ProcessPoolExecutor for Threading | Urls: {len(urls)}, Maximum Worker for ProcessPool: {main_workers}")
 
-    with ProcessPoolExecutor(max_workers=main_workers) as proces_exe:
+    with ProcessPoolExecutor(
+        max_workers=main_workers, mp_context=multiprocessing.get_context("spawn"),
+        initializer=configure_worker_logging, initargs=(log_queue,),
+    ) as proces_exe:
         process_futures_threads = []
         task_1 = proces_exe.submit(run_async, urls_1, max_rty, max_wrks)
         task_2 = proces_exe.submit(fetch_multiple_threaded, urls_2, max_rty, max_wrks)
@@ -427,11 +413,11 @@ def process_multiple_cpu_bound(urls, max_rty=None, max_wrks=None, max_wrks_pool=
                         collected_errors.append(dicts)
         finished = round(time.perf_counter() - start, 5)
 
-        logging.debug(
+        logger.debug(
             f"ProcessPoolExecutor for Threading Completed | Elapsed Time: {finished} secs\n")
         start_2 = time.perf_counter()
 
-        logging.debug(
+        logger.debug(
             f"Starting ProcessPoolExecutor for Process | Maximum Worker for ProcessPool: {main_workers}")
         process_futures = [proces_exe.submit(process_task, dts) for dts in collected_data]
 
@@ -440,7 +426,7 @@ def process_multiple_cpu_bound(urls, max_rty=None, max_wrks=None, max_wrks_pool=
             pool_results.append(res)
 
     fin = round(time.perf_counter() - start_2, 5)
-    logging.debug(
+    logger.debug(
         f"ProcessPoolExecutor for Process Completed | Elapsed Time: {fin} secs\n")
 
     collected_time.update({"all_cpu_time_process": finished})
@@ -448,7 +434,7 @@ def process_multiple_cpu_bound(urls, max_rty=None, max_wrks=None, max_wrks_pool=
     return collected_time, collected_errors, pool_results
 
 
-if __name__ == "__main__":
+def run_cli(log_queue=None):
     print(f"\nAll Logs are stored in: {main_path}\n")
     url_list = ["https://books.toscrape.com/", "http://quotes.toscrape.com/",
              "https://sandbox.oxylabs.io/", "https://www.scrapethissite.com/pages/simple/",
@@ -459,19 +445,19 @@ if __name__ == "__main__":
              "https://old.reddit.com/"]
 
     print(f"{'=' * 20} TESTING {'=' * 20}\n")
-    logging.info(f"Starting Script Process\n")
-    task_time, errors, results = process_multiple_cpu_bound(url_list)
+    logger.info(f"Starting Script Process\n")
+    task_time, errors, results = process_multiple_cpu_bound(url_list, log_queue=log_queue)
 
-    logging.info(f"Script Process Completed\n")
+    logger.info(f"Script Process Completed\n")
     sequential_time = task_time["seq_time_threaded"]
     threadpool_time = task_time["cpu_time_threaded"]
     async_thread_time = task_time["cpu_time_async"]
     processpool_time = task_time["cpu_time_process"]
     processpool_thread_time = task_time["all_cpu_time_process"]
 
-    logging.info("Printing Process Contents")
+    logger.info("Printing Process Contents")
 
-    logging.info("Printing Process Time")
+    logger.info("Printing Process Time")
     print(f"{'=' * 20} ELAPSED TIMINGS {'=' * 20}")
     print("Each method handles a different URL partition; these are not same-input benchmark results.")
     print(f"Sequential partition: {sequential_time} secs")
@@ -481,12 +467,12 @@ if __name__ == "__main__":
     print(f"Analysis phase (including pool shutdown): {processpool_time} secs")
     print()
 
-    logging.warning("Checking for Url Errors")
+    logger.warning("Checking for Url Errors")
     print(f"{'=' * 20} URL ERRORS {'=' * 20}")
     report_errors(errors, results)
     print()
 
-    logging.info("Printing Process Results\n")
+    logger.info("Printing Process Results\n")
     print(f"{'=' * 20} RESULTS {'=' * 20}")
     for dcts in results:
         if not "error" in dcts:
@@ -512,7 +498,7 @@ if __name__ == "__main__":
             print()
 
 
-    logging.info("Scrit Ended\n")
+    logger.info("Scrit Ended\n")
 
 
 
@@ -521,3 +507,8 @@ if __name__ == "__main__":
 different threads which handles different task and that made me giggle, i dont know if it makes my script run faster or otherwise
 i also had issues with dicts, i used [] instead of simply just using, i didnt know the diff btw .json and .json() but to
 be fair, i havent learnt json yet"""
+
+
+if __name__ == "__main__":
+    with log_to_file(main_path_log) as log_queue:
+        run_cli(log_queue)
